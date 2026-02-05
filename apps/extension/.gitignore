@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Build output (load unpacked from dist/chrome-mv3)
+dist/
+.output/
+
+# WXT cache
+.wxt/
+
+# Dev server writes scraped context here (may contain conversation content)
+scripts/data/
+
+# Logs
+*.log

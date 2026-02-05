@@ -1,0 +1,25 @@
+{
+  "name": "overlay-ai-connector",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox",
+    "build": "wxt build",
+    "build:firefox": "wxt build -b firefox",
+    "build:safari": "wxt build -b safari",
+    "zip": "wxt zip",
+    "zip:firefox": "wxt zip -b firefox",
+    "postinstall": "wxt prepare",
+    "test:server": "node scripts/test-ws-server.js",
+    "test:llm-messages": "npx tsx scripts/test-build-llm-messages.ts",
+    "dev:server": "npx tsx scripts/dev-server-with-ask.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2",
+    "wxt": "^0.20.5",
+    "ws": "^8.18.0",
+    "@types/chrome": "^0.0.268"
+  }
+}
