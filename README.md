@@ -15,7 +15,7 @@ Open source (MIT). I'm building this in public—progress updates will be posted
 
 ---
 
-## Tech stack
+## Tech stack (Till Now)
 
 | Layer            | Tech                                                    |
 |------------------|---------------------------------------------------------|
