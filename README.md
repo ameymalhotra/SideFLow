@@ -15,57 +15,99 @@ Open source (MIT). I'm building this in public—progress updates will be posted
 
 ---
 
-## Tech stack (Till Now)
+## Recent changes
 
-| Layer            | Tech                                                    |
-|------------------|---------------------------------------------------------|
-| Extension        | [WXT](https://wxt.dev) (Chrome MV3), TypeScript         |
-| Scraping         | DOM + MutationObserver, site-specific scrapers          |
-| Transport        | WebSocket (extension ↔ local server)                    |
-| Dev server       | Node.js, `ws`, TypeScript (tsx)                         |
-| LLM-ready format | Custom builder for OpenAI & Anthropic message shapes    |
+- **Monorepo workspaces** — Root `package.json` uses npm workspaces (`apps/*`) so dependencies install from the repo root.
+- **Desktop overlay (Electron)** — `apps/desktop-overlay` is a floating always-on-top companion: draggable orb, expandable chat panel, streaming-style replies (demo content for now), and basic window state saved under Electron user data.
+- **Extension** — Browser action popup UI, refreshed icons, tighter scrapers and WebSocket behavior, and dev helpers (`dev-server-with-ask`, debug scripts). See [apps/extension/TESTING.md](apps/extension/TESTING.md) for runbook details.
+
+---
+
+## What we're working on now
+
+Work is sequenced in three phases:
+
+1. **App UI** — Finish the interface for the extension popup and the desktop overlay (layout, flows, connection and loading states, chat affordances). Polish comes after the core shell is in place.
+2. **Context backend** — Solidify the local server path: scraped conversation context, WebSocket delivery, storage/shape of context for follow-up questions, and a clean API for clients (extension + desktop).
+3. **Models & Ollama** — Hook up inference: route asks through the backend, then add **Ollama** (and other model backends) so replies run locally or via whichever provider you configure.
+
+After that: tighter integration (desktop ↔ same server as the extension), persistence where it helps, and documented installs for the Chrome build plus the desktop app.
+
+---
+
+## Tech stack
+
+| Layer | Tech |
+|-------|------|
+| Extension | [WXT](https://wxt.dev) (Chrome MV3), TypeScript |
+| Desktop overlay | Electron, Vite, React, Tailwind CSS, Framer Motion |
+| Scraping | DOM + `MutationObserver`, site-specific scrapers (ChatGPT, Gemini, Claude) |
+| Transport | WebSocket (extension ↔ local server) |
+| Dev server | Node.js, `ws`, TypeScript (`tsx`) — context files + `/ask` |
+| LLM-ready format | `buildLLMMessages()` for OpenAI & Anthropic message shapes |
 
 ---
 
 ## Current status
 
-| Done | Planned |
-|------|---------|
-| Chrome extension for ChatGPT, Gemini, Claude | |
-| Scrape messages, dedupe, send on change | In-overlay input + live LLM answers |
-| Tab switch detection (re-send context when you focus a tab) | Polished UI, optional persistence |
-| Per-conversation storage (one file per chat) | Ship installable extension + desktop companion |
-| Local dev server with /ask + per-site, per-chat files | |
-| `buildLLMMessages()` for overlay questions | |
+**Shipped (baseline):** Chrome extension (ChatGPT, Gemini, Claude) with scrapers, tab-focus handling, WebSocket to a local dev server, per-chat context files, `buildLLMMessages()`, and `/ask`. Desktop app: floating Electron shell (orb + panel) with demo streaming replies.
+
+**Roadmap:** **1.** App UI (extension + desktop) → **2.** Context backend (solid local server + contract for clients) → **3.** Models and **Ollama** (and other backends). Then persistence, polish, and shipping installable extension + desktop builds.
 
 ---
 
 ## Quick start
 
-**Prerequisites:** Node.js 18+, Chrome
+**Prerequisites:** Node.js 18+, Chrome (for the extension). For the desktop app, a desktop OS supported by Electron.
 
-1. **Clone and install**
-   ```bash
-   git clone https://github.com/ameymalhotra/SideFLow.git
-   cd SideFLow/apps/extension
-   npm install
-   ```
+### Option A — Install everything from the repo root (workspaces)
 
-2. **Start the dev server** (stores scraped context to files)
-   ```bash
-   npm run dev:server
-   ```
-   WebSocket on `ws://127.0.0.1:9847`. Context is saved to `scripts/data/<site>-<conversationId>.json`.
+```bash
+git clone https://github.com/ameymalhotra/SideFLow.git
+cd SideFLow
+npm install
+```
 
-3. **Build and load the extension**
-   ```bash
-   npm run build
-   ```
-   In Chrome: `chrome://extensions/` → Developer mode → **Load unpacked** → select `apps/extension/dist/chrome-mv3`.
+Then use the per-app commands below from `apps/extension` or `apps/desktop-overlay`.
 
-4. **Try it:** Open ChatGPT, Gemini, or Claude and have a conversation. Inspect the JSON files in `scripts/data/` to verify that parsing is correct.
+### Option B — Extension only
 
-For detailed steps, reconnection, and troubleshooting, see [apps/extension/TESTING.md](apps/extension/TESTING.md).
+```bash
+git clone https://github.com/ameymalhotra/SideFLow.git
+cd SideFLow/apps/extension
+npm install
+```
+
+**1. Dev server** (scraped context + `/ask`; writes under `apps/extension/scripts/data/`)
+
+```bash
+npm run dev:server
+```
+
+WebSocket on `ws://127.0.0.1:9847`.
+
+**2. Build and load the extension**
+
+```bash
+npm run build
+```
+
+Chrome: `chrome://extensions/` → Developer mode → **Load unpacked** → `apps/extension/dist/chrome-mv3`.
+
+**3. Try it** — Open ChatGPT, Gemini, or Claude and chat; inspect JSON under `scripts/data/` to verify parsing.
+
+### Desktop overlay (Electron)
+
+From `apps/desktop-overlay` after a root or local `npm install`:
+
+```bash
+cd apps/desktop-overlay
+npm run dev
+```
+
+This runs Vite on `http://localhost:5173` and launches Electron against it. Use **File → Quit** or the app menu to exit (global shortcuts may be registered while the app runs).
+
+For detailed extension steps, reconnection, and troubleshooting, see [apps/extension/TESTING.md](apps/extension/TESTING.md).
 
 ---
 
@@ -73,12 +115,16 @@ For detailed steps, reconnection, and troubleshooting, see [apps/extension/TESTI
 
 ```
 SideFLow/
-├── apps/extension/          # Chrome extension + dev server
-│   ├── src/
-│   │   ├── entrypoints/     # background, content script
-│   │   └── lib/             # scrapers, WebSocket, buildLLMMessages
-│   ├── scripts/             # dev server, test WS server, test scripts
-│   └── public/              # icons
+├── package.json             # npm workspaces (apps/*)
+├── apps/
+│   ├── extension/           # Chrome extension + dev server + scrapers
+│   │   ├── src/entrypoints/ # background, content, popup
+│   │   ├── src/lib/         # scrapers, WebSocket, buildLLMMessages
+│   │   ├── scripts/         # dev server, tests, debug helpers
+│   │   └── public/          # icons
+│   └── desktop-overlay/     # Electron + Vite + React floating UI
+│       ├── electron/        # main & preload
+│       └── src/             # React app (orb, chat panel)
 └── README.md
 ```
 
