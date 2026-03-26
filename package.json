@@ -1,0 +1,11 @@
+{
+  "name": "sideflow-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "dependencies": {
+    "lightningcss": "^1.32.0"
+  }
+}

@@ -4,9 +4,9 @@ export default defineConfig({
   srcDir: 'src',
   outDir: 'dist',
   manifest: {
-    name: 'Overlay AI Connector',
-    description: 'Connects your AI chats to Overlay AI',
-    permissions: ['activeTab', 'storage'],
+    name: 'SideFlow',
+    description: 'Connects your AI chats to SideFlow',
+    permissions: ['activeTab', 'storage', 'scripting'],
     host_permissions: [
       '*://chat.openai.com/*',
       '*://chatgpt.com/*',
@@ -15,7 +15,7 @@ export default defineConfig({
       'ws://127.0.0.1:9847/*'
     ],
     action: {
-      default_title: 'Overlay AI - Disconnected',
+      default_title: 'SideFlow - Disconnected',
       default_icon: {
         16: 'icon/icon-16.png',
         32: 'icon/icon-32.png',

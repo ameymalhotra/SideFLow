@@ -66,32 +66,20 @@ In the **terminal where the mock server is running** you should see:
 
 That confirms the extension is scraping the chat and sending it to the server.
 
-## Using buildLLMMessages with live scraped data
+## Verifying parsing with the dev server
 
-To try **real-time** conversion (scraped context → LLM-ready messages) while you chat:
+To verify that scraping and parsing work correctly:
 
-1. **Use the dev server instead of the plain mock server** (only one can use port 9847 at a time):
+1. **Use the dev server** (only one server can use port 9847 at a time):
    ```bash
    cd apps/extension
    npm run dev:server
    ```
-   This starts:
-   - The same WebSocket server on **9847** (extension connects here and context is stored).
-   - An HTTP server on **9849** with a simple “ask” flow.
+   This starts the WebSocket server on **9847**. Scraped context is saved to `scripts/data/<site>-<conversationId>.json`.
 
-2. **Load the extension** and **open an LLM chat** (ChatGPT, Gemini, or Claude) and have a short conversation so the server has context.
+2. **Load the extension** and **open an LLM chat** (ChatGPT, Gemini, or Claude). Have a conversation so the server receives context.
 
-3. **Ask a question** in either of these ways:
-   - **Browser:** Open **http://127.0.0.1:9849** in a new tab. Type a question (e.g. “Summarize the last reply”) and click **Ask**. The page shows the LLM-ready payload (messages + optional system) that `buildLLMMessages` produced from the current scraped context.
-   - **Terminal:**  
-     ```bash
-     curl -X POST http://127.0.0.1:9849/ask \
-       -H "Content-Type: application/json" \
-       -d '{"question":"Summarize the last reply"}'
-     ```
-   Optional: use Anthropic shape with `"provider":"anthropic"` in the JSON body.
-
-If you see `503` or “No scraped context yet”, the extension hasn’t sent a `chat_update` yet—reload the LLM tab or send a message so the server receives context.
+3. **Inspect the JSON files** in `scripts/data/` to verify that messages, roles, and content are parsed correctly.
 
 ## Step 6: Test reconnection (optional)
 

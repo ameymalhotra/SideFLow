@@ -1,6 +1,6 @@
 const WS_URL = 'ws://127.0.0.1:9847';
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
-const PING_INTERVAL_MS = 30000;
+const PING_INTERVAL_MS = 20000;
 
 type Listener = (...args: unknown[]) => void;
 
@@ -29,31 +29,35 @@ export class WebSocketClient {
   }
 
   connect(): void {
+    let socket: WebSocket;
     try {
-      this.ws = new WebSocket(WS_URL);
+      socket = new WebSocket(WS_URL);
+      this.ws = socket;
     } catch {
       this.scheduleReconnect();
       return;
     }
 
-    this.ws.onopen = () => {
+    socket.onopen = () => {
       this.reconnectAttempt = 0;
       this.emit('connected');
       this.startPing();
     };
 
-    this.ws.onclose = () => {
+    socket.onclose = () => {
+      if (this.ws !== socket) return;
       this.stopPing();
       this.ws = null;
       this.emit('disconnected');
       this.scheduleReconnect();
     };
 
-    this.ws.onerror = () => {
+    socket.onerror = () => {
+      if (this.ws !== socket) return;
       this.emit('disconnected');
     };
 
-    this.ws.onmessage = (event: MessageEvent) => {
+    socket.onmessage = (event: MessageEvent) => {
       try {
         const data = JSON.parse(event.data as string);
         this.emit('message', data);

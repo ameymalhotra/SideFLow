@@ -79,7 +79,10 @@ function findMessages(container: Element): ChatMessage[] {
   for (const { el, role } of allBlocks) {
     if (seen.has(el)) continue;
     seen.add(el);
-    const content = getTextContent(el);
+    let content = getTextContent(el);
+    if (role === 'user' && /^\s*You said\s+/i.test(content)) {
+      content = content.replace(/^\s*You said\s+/i, '').trim();
+    }
     if (content) {
       const isStreaming =
         role === 'assistant' &&

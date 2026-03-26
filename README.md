@@ -31,7 +31,7 @@ Open source (MIT). I'm building this in public—progress updates will be posted
 
 | Done | Planned |
 |------|---------|
-| Chrome extension for ChatGPT, Gemini, Claude | Desktop overlay app (Tauri/Electron) |
+| Chrome extension for ChatGPT, Gemini, Claude | |
 | Scrape messages, dedupe, send on change | In-overlay input + live LLM answers |
 | Tab switch detection (re-send context when you focus a tab) | Polished UI, optional persistence |
 | Per-conversation storage (one file per chat) | Ship installable extension + desktop companion |
@@ -51,11 +51,11 @@ Open source (MIT). I'm building this in public—progress updates will be posted
    npm install
    ```
 
-2. **Start the dev server** (stores context, serves a simple "ask" page)
+2. **Start the dev server** (stores scraped context to files)
    ```bash
    npm run dev:server
    ```
-   You'll see WebSocket on `ws://127.0.0.1:9847` and HTTP on `http://127.0.0.1:9849`.
+   WebSocket on `ws://127.0.0.1:9847`. Context is saved to `scripts/data/<site>-<conversationId>.json`.
 
 3. **Build and load the extension**
    ```bash
@@ -63,7 +63,7 @@ Open source (MIT). I'm building this in public—progress updates will be posted
    ```
    In Chrome: `chrome://extensions/` → Developer mode → **Load unpacked** → select `apps/extension/dist/chrome-mv3`.
 
-4. **Try it:** Open ChatGPT, Gemini, or Claude and have a conversation. Then open **http://127.0.0.1:9849**, pick the site (and conversation if you have several), type a question like "Summarize the last reply," and click Ask. You'll see the LLM-ready payload built from that chat's context.
+4. **Try it:** Open ChatGPT, Gemini, or Claude and have a conversation. Inspect the JSON files in `scripts/data/` to verify that parsing is correct.
 
 For detailed steps, reconnection, and troubleshooting, see [apps/extension/TESTING.md](apps/extension/TESTING.md).
 

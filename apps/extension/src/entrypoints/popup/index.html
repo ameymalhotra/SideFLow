@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SideFlow</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <header class="header">
+        <div class="logo-wrap">
+          <span class="brand">SideFlow</span>
+        </div>
+      </header>
+
+      <main class="main">
+        <div id="status-card" class="status-card loading">
+          <div class="status-indicator">
+            <span class="status-dot"></span>
+            <span id="status-text" class="status-text">Connecting…</span>
+          </div>
+          <p id="status-sub" class="status-sub">Checking server status</p>
+        </div>
+
+        <div class="sources-label">AI sources monitored</div>
+        <ul class="sources">
+          <li class="source-item">
+            <span class="source-dot chatgpt"></span>ChatGPT
+          </li>
+          <li class="source-item">
+            <span class="source-dot gemini"></span>Gemini
+          </li>
+          <li class="source-item">
+            <span class="source-dot claude"></span>Claude
+          </li>
+        </ul>
+      </main>
+
+      <footer class="footer">
+        <span class="footer-text">SideFlow Chrome Extension</span>
+      </footer>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

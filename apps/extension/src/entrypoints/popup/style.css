@@ -1,0 +1,184 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  width: 280px;
+  background: #060a0e;
+  color: #e0f7fa;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.container {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ── Header ── */
+.header {
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid rgba(77, 217, 240, 0.1);
+}
+
+.logo-wrap {
+  display: flex;
+  align-items: center;
+}
+
+.brand {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  color: #4dd9f0;
+  text-shadow: 0 0 18px rgba(77, 217, 240, 0.45);
+}
+
+/* ── Main ── */
+.main {
+  padding: 14px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ── Status card ── */
+.status-card {
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: rgba(77, 217, 240, 0.04);
+  border: 1px solid rgba(77, 217, 240, 0.1);
+  transition: border-color 0.3s, background 0.3s;
+}
+
+.status-card.connected {
+  background: rgba(77, 217, 240, 0.07);
+  border-color: rgba(77, 217, 240, 0.3);
+}
+
+.status-card.disconnected {
+  background: rgba(248, 113, 113, 0.07);
+  border-color: rgba(248, 113, 113, 0.2);
+}
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #6b7280;
+  transition: background 0.3s;
+}
+
+.connected .status-dot {
+  background: #4dd9f0;
+  box-shadow: 0 0 0 3px rgba(77, 217, 240, 0.2);
+  animation: pulse-cyan 2.5s infinite;
+}
+
+.disconnected .status-dot {
+  background: #f87171;
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.2);
+}
+
+@keyframes pulse-cyan {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(77, 217, 240, 0.2); }
+  50%       { box-shadow: 0 0 0 5px rgba(77, 217, 240, 0.06); }
+}
+
+.status-text {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.1px;
+  color: #e8e8f0;
+}
+
+.connected .status-text {
+  color: #4dd9f0;
+}
+
+.disconnected .status-text {
+  color: #fca5a5;
+}
+
+.status-sub {
+  font-size: 11px;
+  color: #4b5563;
+  padding-left: 16px;
+}
+
+.connected .status-sub {
+  color: #4dd9f0;
+  opacity: 0.65;
+}
+
+.disconnected .status-sub {
+  color: #fca5a5;
+  opacity: 0.65;
+}
+
+/* ── Sources ── */
+.sources-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: #4b5563;
+}
+
+.sources {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.source-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.source-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.source-dot.chatgpt  { background: #10b981; }
+.source-dot.gemini   { background: #3b82f6; }
+.source-dot.claude   { background: #f59e0b; }
+
+/* ── Footer ── */
+.footer {
+  padding: 8px 16px 12px;
+  border-top: 1px solid rgba(77, 217, 240, 0.07);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.footer-text {
+  font-size: 10px;
+  color: #374151;
+  letter-spacing: 0.3px;
+}

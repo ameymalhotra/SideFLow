@@ -1,0 +1,67 @@
+@import './global.css';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+
+/* utility: hide scrollbars (cross-browser) */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.liquid-layer {
+  isolation: isolate;
+}
+
+.liquid-blob-screen {
+  mix-blend-mode: screen;
+}
+
+.liquid-blob-soft {
+  mix-blend-mode: soft-light;
+}
+
+.glass-shadow-stack {
+  box-shadow: var(--sf-shadow-panel);
+}
+
+.glass-reflect-top {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.22) 0%,
+    rgba(255, 255, 255, 0.08) 34%,
+    rgba(255, 255, 255, 0.01) 56%,
+    rgba(255, 255, 255, 0) 70%
+  );
+}
+
+.ring-focus-soft:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.38),
+    0 0 0 3px rgba(121, 182, 255, 0.22);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
