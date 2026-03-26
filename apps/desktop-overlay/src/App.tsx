@@ -63,7 +63,6 @@ function renderRichText(content: string) {
 
 export default function App() {
   const [overlayMode, setOverlayMode] = useState<'collapsed' | 'expanded'>('collapsed');
-  const [windowPos, setWindowPos] = useState({ x: 0, y: 0 });
   const [context, setContext] = useState('No context yet');
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
@@ -134,18 +133,9 @@ export default function App() {
     }
 
     // Only read window position on mount — never let this override renderer mode state.
-    void (async () => {
-      const state = await window.electronAPI?.getOverlayState?.();
-      if (!state) return;
-      setWindowPos({ x: state.x, y: state.y });
-    })();
-
     if (window.electronAPI?.onOverlayBoundsChanged) {
       cleanups.push(
-        window.electronAPI.onOverlayBoundsChanged((payload) => {
-          if (payload.mode === 'collapsed') {
-            setWindowPos({ x: payload.x, y: payload.y });
-          }
+        window.electronAPI.onOverlayBoundsChanged((_payload) => {
           requestAnimationFrame(() => {
             document.documentElement.getBoundingClientRect();
             const root = document.getElementById('root');
@@ -253,13 +243,21 @@ export default function App() {
   }, []);
 
   const handleStartDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (overlayMode !== 'collapsed') return;
+    if (e.button !== 0) return;
+    if (overlayMode === 'expanded') {
+      const t = e.target as HTMLElement;
+      if (t.closest('button, textarea, a, input')) return;
+      if (t.closest('[data-message-bubble]')) return;
+      if (t.closest('[data-no-window-drag]')) return;
+    } else if (overlayMode !== 'collapsed') {
+      return;
+    }
     draggingRef.current = {
       pointerId: e.pointerId,
       startScreenX: e.screenX,
       startScreenY: e.screenY,
-      startWindowX: windowPos.x,
-      startWindowY: windowPos.y,
+      startWindowX: window.screenX,
+      startWindowY: window.screenY,
       didMove: false,
       captureTarget: e.target as EventTarget & {
         setPointerCapture?: (id: number) => void;
@@ -267,11 +265,11 @@ export default function App() {
       },
     };
     draggingRef.current.captureTarget?.setPointerCapture?.(e.pointerId);
-  }, [overlayMode, windowPos.x, windowPos.y]);
+  }, [overlayMode]);
 
   const handleMoveDrag = useCallback(async (e: React.PointerEvent<HTMLDivElement>) => {
     const drag = draggingRef.current;
-    if (!drag || drag.pointerId !== e.pointerId || overlayMode !== 'collapsed') return;
+    if (!drag || drag.pointerId !== e.pointerId) return;
     const deltaX = e.screenX - drag.startScreenX;
     const deltaY = e.screenY - drag.startScreenY;
     if (!drag.didMove && (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3)) {
@@ -279,9 +277,8 @@ export default function App() {
     }
     const nextX = drag.startWindowX + deltaX;
     const nextY = drag.startWindowY + deltaY;
-    const moved = await window.electronAPI?.moveOverlay?.(nextX, nextY);
-    if (moved) setWindowPos(moved);
-  }, [overlayMode]);
+    await window.electronAPI?.moveOverlay?.(nextX, nextY);
+  }, []);
 
   const handleEndDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const drag = draggingRef.current;
@@ -317,7 +314,18 @@ export default function App() {
   }
 
   return (
-    <div className="cloud-panel h-full w-full overflow-hidden rounded-[var(--sf-radius-panel)] bg-transparent">
+    <div
+      className="cloud-panel h-full w-full overflow-hidden rounded-[var(--sf-radius-panel)] bg-transparent"
+      onPointerDown={handleStartDrag}
+      onPointerMove={handleMoveDrag}
+      onPointerUp={handleEndDrag}
+      onPointerCancel={handleEndDrag}
+      onClickCapture={(ev) => {
+        if (!suppressClickRef.current) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+      }}
+    >
       <div className="glass-shadow-stack relative h-full w-full overflow-hidden rounded-[var(--sf-radius-panel)]">
         {/* Decorative layers must not participate in hit-testing — otherwise they block drag / clicks. */}
         {/* Layer 0: base tint */}
@@ -339,28 +347,17 @@ export default function App() {
         {/* Layer 4: content */}
         <div className="relative z-10 flex h-full flex-col text-white">
           <header className="relative flex select-none items-center gap-3 px-5 pt-4 pb-3">
-            <div className="relative z-0 min-h-[40px] min-w-0 flex-1 self-stretch">
-              <div
-                className="absolute inset-0"
-                aria-hidden
-                style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
-              />
-              <div className="relative z-10 flex h-full min-h-[40px] items-center gap-3 pointer-events-none">
-                <div className="text-[12px] font-semibold tracking-[0.2em] text-[color:var(--sf-text-2)]">
-                  SIDEFLOW
-                </div>
-                <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--sf-accent-c)] animate-pulse" />
+            <div className="relative z-0 flex min-h-[40px] min-w-0 flex-1 items-center gap-3">
+              <div className="text-[12px] font-semibold tracking-[0.2em] text-[color:var(--sf-text-2)]">
+                SIDEFLOW
               </div>
+              <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--sf-accent-c)] animate-pulse" />
             </div>
 
-            <div
-              className="relative z-20 shrink-0"
-              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            >
+            <div className="relative z-20 shrink-0">
               <button
                 type="button"
                 className="ring-focus-soft grid h-8 w-8 place-items-center rounded-full border border-[color:var(--sf-border-soft)] bg-[color:var(--sf-surface-soft)] text-[color:var(--sf-text-2)] transition-all duration-200 ease-out hover:border-white/25 hover:bg-white/15 hover:text-[color:var(--sf-text)]"
-                style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
                 title="Close"
                 onPointerDown={(e) => {
                   e.stopPropagation();
@@ -379,8 +376,8 @@ export default function App() {
 
           <div className="px-5 pb-2">
             <div
+              data-no-window-drag
               className="inline-flex max-w-full items-center gap-2 rounded-full border border-[color:var(--sf-border-soft)] bg-[color:var(--sf-surface-soft)] px-3 py-1.5 text-[11px] text-[color:var(--sf-text-2)]"
-              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
               title={context}
             >
               <span className="shrink-0 uppercase tracking-[0.12em] text-[color:var(--sf-muted)]">Context</span>
@@ -391,7 +388,6 @@ export default function App() {
           <div
             ref={scrollRef}
             className="scrollbar-hide flex-1 overflow-y-auto px-5 pt-2 pb-3"
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
             <AnimatePresence initial={false}>
               <div className="flex flex-col gap-3">
@@ -400,6 +396,7 @@ export default function App() {
                   return (
                     <motion.div
                       key={m.id}
+                      data-message-bubble
                       variants={messageVariants}
                       initial="initial"
                       animate="animate"
@@ -431,13 +428,10 @@ export default function App() {
             </AnimatePresence>
           </div>
 
-          <div
-            className="relative z-10 px-5 pb-4"
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-          >
+          <div className="relative z-10 px-5 pb-4">
             <div
+              data-no-window-drag
               className="flex items-end gap-1.5 rounded-full border border-[color:var(--sf-border-soft)] bg-[color:var(--sf-surface-soft)] py-1 pl-3.5 pr-1 shadow-[inset_0_0_0_0.5px_rgba(255,255,255,0.08)] transition-[box-shadow,border-color] duration-200 ease-out focus-within:border-white/22 focus-within:shadow-[inset_0_0_0_0.5px_rgba(255,255,255,0.2),0_0_0_3px_rgba(121,182,255,0.14)]"
-              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             >
               <textarea
                 ref={inputRef}
@@ -446,7 +440,6 @@ export default function App() {
                 disabled={isStreaming}
                 placeholder="Ask…"
                 className="scrollbar-hide max-h-[72px] min-h-[18px] flex-1 resize-none bg-transparent py-1.5 pl-0 pr-1 text-[12px] leading-[1.45] text-[color:var(--sf-text)] placeholder:text-[color:var(--sf-muted)] focus:outline-none disabled:opacity-60"
-                style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
                 onChange={(e) => {
                   setInput(e.target.value);
                   autoResize(e.currentTarget);
@@ -462,7 +455,6 @@ export default function App() {
               <button
                 type="button"
                 className="ring-focus-soft mb-px grid h-8 w-8 shrink-0 place-items-center rounded-full border border-blue-100/28 bg-[linear-gradient(145deg,rgba(121,182,255,0.92),rgba(127,147,255,0.88))] text-white shadow-[var(--sf-shadow-soft)] transition-all duration-200 ease-out hover:brightness-110 active:scale-[0.96] disabled:scale-100 disabled:opacity-40 disabled:hover:brightness-100"
-                style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
                 onClick={() => handleSend()}
                 disabled={!input.trim() || isStreaming}
                 title="Send"

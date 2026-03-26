@@ -233,9 +233,18 @@ app.whenReady().then(() => {
 
   ipcMain.handle('overlay-move', (_event, coords) => {
     if (!chatWindow) return { x: 0, y: 0 };
-    const clamped = clampToAllDisplays(coords.x, coords.y, ORB_SIZE.width, ORB_SIZE.height);
-    orbPosition = clamped;
+    const w = overlayMode === 'expanded' ? PANEL_SIZE.width : ORB_SIZE.width;
+    const h = overlayMode === 'expanded' ? PANEL_SIZE.height : ORB_SIZE.height;
+    const clamped = clampToAllDisplays(coords.x, coords.y, w, h);
     chatWindow.setPosition(clamped.x, clamped.y, false);
+    if (overlayMode === 'expanded') {
+      // Keep orb anchor in sync with panel so collapse lands in the right place after dragging the chat.
+      const ox = Math.round(clamped.x + PANEL_SIZE.width / 2 - ORB_SIZE.width / 2);
+      const oy = Math.round(clamped.y + PANEL_SIZE.height / 2 - ORB_SIZE.height / 2);
+      orbPosition = clampToAllDisplays(ox, oy, ORB_SIZE.width, ORB_SIZE.height);
+    } else {
+      orbPosition = clamped;
+    }
     notifyBoundsChanged();
     return clamped;
   });
