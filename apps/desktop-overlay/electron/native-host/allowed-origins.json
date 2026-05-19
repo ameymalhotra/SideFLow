@@ -1,0 +1,6 @@
+{
+  "origins": [
+    "chrome-extension://mjciggeibjlglhiamfclofgcmgmjpbee/"
+  ],
+  "comment": "Deterministic ID from manifest key in apps/extension/wxt.config.ts. Add more origins if you use a separate production key."
+}

@@ -1,9 +1,13 @@
-# Testing the Overlay AI Connector Extension
+# Testing the SideFlow Extension
 
 ## Prerequisites
 
 - Chrome (or another Chromium browser)
-- Node.js 18+
+- Node.js 18+ on your PATH (used by the Native Messaging host that bridges to the desktop app)
+- **SideFlow Desktop** running (`apps/desktop-overlay`) so it can:
+  - listen on the local WebSocket `ws://127.0.0.1:9847`
+  - write `bridge-token.json` under Electron user data
+  - register the Chrome Native Messaging host manifest (`com.sideflow.nmh.json`) under your browser profile
 
 ## Step 1: Build the extension
 
@@ -16,101 +20,84 @@ npm run build
 
 You should see output like `Built extension in ... ms` and a list of files under `dist/chrome-mv3/`.
 
-## Step 2: Start the mock WebSocket server
+The manifest includes a fixed `key` so the extension ID is stable (`chrome-extension://mjciggeibjlglhiamfclofgcmgmjpbee/`), matching [allowed-origins.json](../desktop-overlay/electron/native-host/allowed-origins.json) in the desktop app.
 
-In a **separate terminal**, start the test server (so you can see messages from the extension):
+## Step 2: Start SideFlow Desktop
+
+In a **separate terminal**:
 
 ```bash
-cd apps/extension
-npm run test:server
+cd apps/desktop-overlay
+npm install   # once, to install the `ws` dependency for the native host
+npm run dev
 ```
 
-You should see:
-
-```
-Mock WebSocket server listening on ws://127.0.0.1:9847
-Load the extension and open an LLM chat to see messages.
-```
-
-Leave this terminal open; messages will appear here when you use the extension.
+Leave this running. On startup the app registers Native Messaging manifests pointing at `electron/native-host/sideflow-native-host.js` (macOS/Linux) or `launch-win.cmd` (Windows).
 
 ## Step 3: Load the extension in Chrome
 
 1. Open Chrome and go to `chrome://extensions/`.
 2. Turn **Developer mode** on (toggle in the top-right).
 3. Click **Load unpacked**.
-4. Choose the folder: **`apps/extension/dist/chrome-mv3`** (the `dist` folder appears after you run `npm run build`; pick the **chrome-mv3** subfolder).
-5. The extension should appear in the list (e.g. "Overlay AI Connector").
+4. Choose **`apps/extension/dist/chrome-mv3`**.
+5. If the desktop app was launched after the extension, give the extension up to a minute to reconnect automatically. Reloading the extension is now only a fallback, not the normal flow.
 
 ## Step 4: Check connection status
 
-- **Before the server is running:** The extension icon should show the **disconnected** state (grey), and the tooltip: "Overlay AI - Disconnected".
-- **After starting the server (Step 2):** Within a few seconds the icon should switch to the **connected** state (green) and the tooltip: "Overlay AI - Connected".
+- **Desktop not running:** The extension icon should show **disconnected** (grey).
+- **Desktop running:** Within a few seconds the icon should show **connected** (green), meaning the Native Messaging port is open and the host process is proxying to the desktop WebSocket.
 
-If it stays disconnected, make sure the mock server is running and that nothing else is using port 9847.
+If it stays disconnected:
+
+- Confirm Node is on your PATH (`node -v`).
+- Confirm manifests exist, e.g. on macOS:  
+  `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.sideflow.nmh.json`
+- Open the extension service worker / background page in Chrome DevTools and check for Native Messaging errors.
 
 ## Step 5: Test on an LLM chat site
 
-1. Open a new tab and go to one of:
-   - https://chat.openai.com or https://chatgpt.com
-   - https://gemini.google.com
-   - https://claude.ai
-2. Log in if needed and start or open a conversation.
-3. Send a message and wait for a reply.
+1. Open ChatGPT, Gemini, or Claude (supported URLs).
+2. Chat as usual; the desktop app should receive `site_detected` / `chat_update` traffic via the bridge.
 
-In the **terminal where the mock server is running** you should see:
+## Mock WebSocket server (extension transport bypass)
 
-- `Extension connected from ...` when the extension connects.
-- `Received: { "type": "site_detected", "site": "chatgpt", "url": "...", "messages": [...] }` when the page loads.
-- `Received: { "type": "chat_update", ... }` when you send a message or the model replies.
+The extension **no longer** opens a raw WebSocket to port 9847. To test **only** the WebSocket protocol (without Native Messaging), run:
 
-That confirms the extension is scraping the chat and sending it to the server.
+```bash
+cd apps/extension
+npm run test:server
+```
 
-## Verifying parsing with the dev server
+Use a WebSocket client or scripts against `ws://127.0.0.1:9847` with the auth handshake from [desktop-state bridge token](../desktop-overlay/electron/desktop-state.js). This does **not** exercise the Chrome extension path.
 
-To verify that scraping and parsing work correctly:
+## Dev server with `/ask` (scraped JSON files)
 
-1. **Use the dev server** (only one server can use port 9847 at a time):
-   ```bash
-   cd apps/extension
-   npm run dev:server
-   ```
-   This starts the WebSocket server on **9847**. Scraped context is saved to `scripts/data/<site>-<conversationId>.json`.
+```bash
+cd apps/extension
+npm run dev:server
+```
 
-2. **Load the extension** and **open an LLM chat** (ChatGPT, Gemini, or Claude). Have a conversation so the server receives context.
+Do not run this on 9847 at the same time as SideFlow Desktop. Stop one before starting the other.
 
-3. **Inspect the JSON files** in `scripts/data/` to verify that messages, roles, and content are parsed correctly.
+## Reconnection
 
-## Step 6: Test reconnection (optional)
-
-1. Stop the mock server (Ctrl+C in that terminal).
-2. In Chrome, the extension icon should switch back to **disconnected**.
-3. Start the server again: `npm run test:server`.
-4. The icon should switch back to **connected** within a few seconds (after the extension’s retry delay).
-
-## Step 7: Test on multiple sites (optional)
-
-Repeat Step 5 on the other LLM sites (ChatGPT, Gemini, Claude). The `site` field in the server logs should match (`chatgpt`, `gemini`, or `claude`).
-
----
+1. Quit SideFlow Desktop.
+2. The extension should show disconnected.
+3. Start the desktop again; the extension should reconnect after its retry backoff.
 
 ## Can't find the extension folder?
 
-- You must run **Step 1** (`npm run build`) first. The folder to load is created by the build.
-- Load the **`chrome-mv3`** subfolder, not the root: `apps/extension/dist/chrome-mv3`. That folder contains `manifest.json`.
-- In the "Load unpacked" dialog you can paste or type the path. From the project root it is: `apps/extension/dist/chrome-mv3` (or use the full path, e.g. `/Users/.../overlay-ai/apps/extension/dist/chrome-mv3`).
+- Run **`npm run build`** first.
+- Load **`chrome-mv3`**, not the repo root: `apps/extension/dist/chrome-mv3`.
 
 ## Troubleshooting
 
 | Issue | What to try |
 |-------|-------------|
-| Icon stays disconnected | Ensure the mock server is running on port 9847 and no firewall is blocking localhost. |
-| No messages in server log | Reload the LLM tab (F5). Check that the URL matches the supported sites. |
-| "Extension context invalidated" | Reload the extension at `chrome://extensions/` (click the refresh icon), then reload the LLM tab. |
-| Build errors | Run `npm install` in `apps/extension`, then `npm run build` again. |
+| Icon stays disconnected | Run SideFlow Desktop; ensure Node is on PATH; verify `com.sideflow.nmh.json` under Chrome’s `NativeMessagingHosts` folder. |
+| Wrong extension ID | Use the built extension with the committed manifest `key`, or add your origin to `allowed-origins.json` and restart the desktop app. |
+| "Specified native messaging host not found" | Confirm the `path` inside `com.sideflow.nmh.json` points to a real file. The extension retries automatically, but a manual reload is still a valid fallback if Chrome has cached the missing host state. |
 
-## Testing in Safari (macOS only)
+## Testing in Safari / Firefox
 
-1. Build for Safari: `npm run build:safari`.
-2. Output is in `.output/safari-mv2/`.
-3. In Safari: **Develop → Allow Unsigned Extensions** (if needed), then **Safari → Settings → Extensions** and add the built extension. Safari may require an Xcode wrapper for development; see [WXT Safari docs](https://wxt.dev/guide/browser-support/safari.html).
+Native Messaging differs by browser. This flow targets **Chrome** (Chromium). Firefox uses `allowed_extensions` in the host manifest; Safari does not use Chrome’s Native Messaging—treat as follow-up.

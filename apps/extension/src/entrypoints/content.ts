@@ -19,7 +19,31 @@ function withDedupedMessages(context: ScrapedContext): ScrapedContext {
   };
 }
 
+function sendRuntimeMessage(message: object, logLabel = 'content'): void {
+  try {
+    chrome.runtime.sendMessage(message, () => {
+      const err = chrome.runtime.lastError;
+      if (err?.message) {
+        console.warn(`[SideFlow] ${logLabel} sendMessage:`, err.message);
+      }
+    });
+  } catch (e) {
+    console.warn(`[SideFlow] ${logLabel} sendMessage failed:`, e);
+  }
+}
+
+function safeScrape(scraper: (typeof scrapers)[number]): ScrapedContext | null {
+  try {
+    return scraper.scrape();
+  } catch (e) {
+    console.warn('[SideFlow] scrape failed:', e);
+    return null;
+  }
+}
+
 export default defineContentScript({
+  // Keep in sync with `wxt.config.ts` host_permissions and `src/lib/sites.ts`
+  // (CHAT_URL_PATTERNS). WXT extracts this list statically for the manifest.
   matches: [
     '*://chat.openai.com/*',
     '*://chatgpt.com/*',
@@ -27,58 +51,135 @@ export default defineContentScript({
     '*://claude.ai/*'
   ],
   main() {
-    const scraper = scrapers.find((s) => s.isMatch(window.location.href));
-    if (!scraper) return;
+    let stopObserving: (() => void) | undefined;
+    let visibilityDebounce: ReturnType<typeof setTimeout> | null = null;
+    let routeDebounce: ReturnType<typeof setTimeout> | null = null;
+    let lastDedupeKey = '';
+    let currentScraper: (typeof scrapers)[number] | null = null;
 
-    const initialContext = withDedupedMessages(scraper.scrape());
-    chrome.runtime.sendMessage({
-      type: 'site_detected',
-      ...initialContext
-    });
-
-    let lastSentJSON = JSON.stringify(initialContext.messages);
+    const dedupeKeyFor = (ctx: ScrapedContext) =>
+      JSON.stringify({
+        site: ctx.site,
+        url: ctx.url,
+        conversationId: ctx.conversationId ?? null,
+        messages: ctx.messages
+      });
 
     const maybeSendUpdate = (context: ScrapedContext) => {
       const deduped = withDedupedMessages(context);
-      const json = JSON.stringify(deduped.messages);
-      if (json === lastSentJSON) return;
-      lastSentJSON = json;
-      chrome.runtime.sendMessage({
+      const key = dedupeKeyFor(deduped);
+      if (key === lastDedupeKey) return;
+      lastDedupeKey = key;
+      sendRuntimeMessage({
         type: 'chat_update',
         ...deduped
       });
     };
 
-    const stopObserving = scraper.observe(maybeSendUpdate);
+    const startOrRestart = () => {
+      if (stopObserving) {
+        stopObserving();
+        stopObserving = undefined;
+      }
 
-    let visibilityDebounce: ReturnType<typeof setTimeout> | null = null;
+      const scraper = scrapers.find((s) => s.isMatch(window.location.href)) ?? null;
+      currentScraper = scraper;
+      if (!scraper) return;
+
+      const initial = safeScrape(scraper);
+      if (!initial) return;
+      const initialContext = withDedupedMessages(initial);
+      sendRuntimeMessage({
+        type: 'site_detected',
+        ...initialContext
+      });
+
+      lastDedupeKey = dedupeKeyFor(initialContext);
+      stopObserving = scraper.observe((ctx) => {
+        try {
+          maybeSendUpdate(ctx);
+        } catch (e) {
+          console.warn('[SideFlow] update handler failed:', e);
+        }
+      });
+    };
+
+    const scheduleRouteRestart = () => {
+      if (routeDebounce) clearTimeout(routeDebounce);
+      routeDebounce = setTimeout(() => {
+        routeDebounce = null;
+        startOrRestart();
+      }, 160);
+    };
+
+    const origPushState = history.pushState.bind(history);
+    history.pushState = (...args: Parameters<History['pushState']>) => {
+      origPushState(...args);
+      scheduleRouteRestart();
+    };
+    const origReplaceState = history.replaceState.bind(history);
+    history.replaceState = (...args: Parameters<History['replaceState']>) => {
+      origReplaceState(...args);
+      scheduleRouteRestart();
+    };
+    window.addEventListener('popstate', scheduleRouteRestart);
+    window.addEventListener('hashchange', scheduleRouteRestart);
+
+    startOrRestart();
+
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState !== 'visible') return;
       if (visibilityDebounce) clearTimeout(visibilityDebounce);
       visibilityDebounce = setTimeout(() => {
         visibilityDebounce = null;
-        const context = withDedupedMessages(scraper.scrape());
-        chrome.runtime.sendMessage({
+        if (!currentScraper) return;
+        const scraped = safeScrape(currentScraper);
+        if (!scraped) return;
+        const context = withDedupedMessages(scraped);
+        sendRuntimeMessage({
           type: 'site_detected',
           ...context
         });
-        lastSentJSON = JSON.stringify(context.messages);
+        lastDedupeKey = dedupeKeyFor(context);
       }, 150);
     });
 
     chrome.runtime.onMessage.addListener(
       (msg: { type: string }, _sender, sendResponse) => {
-        if (msg.type === 'get_context') {
-          const context = withDedupedMessages(scraper.scrape());
-          sendResponse({ type: 'chat_update', ...context });
+        if (msg.type !== 'get_context') {
+          sendResponse(null);
+          return false;
         }
-        return true;
+        if (!currentScraper) {
+          sendResponse(null);
+          return false;
+        }
+        try {
+          const scraped = safeScrape(currentScraper);
+          if (!scraped) {
+            sendResponse(null);
+            return false;
+          }
+          const context = withDedupedMessages(scraped);
+          sendResponse({ type: 'chat_update', ...context });
+        } catch (e) {
+          console.warn('[SideFlow] get_context failed:', e);
+          sendResponse(null);
+        }
+        return false;
       }
     );
 
     window.addEventListener('beforeunload', () => {
       if (visibilityDebounce) clearTimeout(visibilityDebounce);
-      chrome.runtime.sendMessage({ type: 'site_left', site: scraper.site });
+      if (routeDebounce) clearTimeout(routeDebounce);
+      if (currentScraper) {
+        sendRuntimeMessage({
+          type: 'site_left',
+          site: currentScraper.site,
+          url: typeof window !== 'undefined' ? window.location.href : undefined
+        });
+      }
       if (typeof stopObserving === 'function') stopObserving();
     });
   }

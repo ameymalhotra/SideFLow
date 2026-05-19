@@ -1,11 +1,12 @@
 import type { ChatScraper, ChatMessage, ScrapedContext } from './types';
 import {
-  debounce,
-  DEBOUNCE_MS,
+  createDOMObserver,
   getTextContent,
   messageId,
   createScrapedContext
 } from './base';
+import { urlMatchesSite } from '../sites';
+import { extractChatGptConversationId } from './conversation-id';
 
 const MESSAGE_SELECTORS = [
   '[data-message-author-role]',
@@ -17,11 +18,6 @@ const CONTENT_SELECTORS = {
   user: ['.whitespace-pre-wrap', '[data-message-author-role="user"]'],
   assistant: ['.markdown', '.prose', '[data-message-author-role="assistant"]']
 };
-
-function extractConversationId(): string | undefined {
-  const match = window.location.pathname.match(/\/c\/([a-f0-9-]+)/i);
-  return match?.[1];
-}
 
 function getMessageContent(el: Element, role: 'user' | 'assistant'): string {
   const selectors = CONTENT_SELECTORS[role];
@@ -43,10 +39,7 @@ export class ChatGPTScraper implements ChatScraper {
   site = 'chatgpt' as const;
 
   isMatch(url: string): boolean {
-    return (
-      url.includes('chat.openai.com') ||
-      url.includes('chatgpt.com')
-    );
+    return urlMatchesSite(url, this.site);
   }
 
   scrape(): ScrapedContext {
@@ -83,38 +76,12 @@ export class ChatGPTScraper implements ChatScraper {
       this.site,
       window.location.href,
       messages,
-      extractConversationId()
+      extractChatGptConversationId()
     );
   }
 
   observe(callback: (context: ScrapedContext) => void): () => void {
-    const debouncedCallback = debounce(() => {
-      callback(this.scrape());
-    }, DEBOUNCE_MS);
-
-    let container: Element | null = null;
-    for (const sel of MESSAGE_SELECTORS) {
-      const first = document.querySelector(sel);
-      if (first) {
-        container = first.closest('main') ?? document.body;
-        break;
-      }
-    }
-    if (!container) container = document.body;
-
-    const observer = new MutationObserver(() => {
-      debouncedCallback();
-    });
-
-    observer.observe(container, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-      characterDataOldValue: true
-    });
-
-    debouncedCallback();
-
-    return () => observer.disconnect();
+    const root = document.querySelector('main') ?? document.documentElement;
+    return createDOMObserver(root, () => this.scrape(), callback);
   }
 }

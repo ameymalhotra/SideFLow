@@ -8,38 +8,19 @@
   </head>
   <body>
     <div class="container">
-      <header class="header">
-        <div class="logo-wrap">
-          <span class="brand">SideFlow</span>
-        </div>
-      </header>
-
-      <main class="main">
-        <div id="status-card" class="status-card loading">
-          <div class="status-indicator">
-            <span class="status-dot"></span>
-            <span id="status-text" class="status-text">Connecting…</span>
+      <section id="status-card" class="status-card">
+        <div class="status-topline">SideFlow Extension</div>
+        <div class="status-row">
+          <div class="status-copy">
+            <div id="status-text" class="status-text">Connecting…</div>
+            <p id="status-sub" class="status-sub">Checking desktop bridge</p>
           </div>
-          <p id="status-sub" class="status-sub">Checking server status</p>
+          <span class="status-indicator" aria-hidden="true">
+            <span class="status-dot"></span>
+          </span>
         </div>
-
-        <div class="sources-label">AI sources monitored</div>
-        <ul class="sources">
-          <li class="source-item">
-            <span class="source-dot chatgpt"></span>ChatGPT
-          </li>
-          <li class="source-item">
-            <span class="source-dot gemini"></span>Gemini
-          </li>
-          <li class="source-item">
-            <span class="source-dot claude"></span>Claude
-          </li>
-        </ul>
-      </main>
-
-      <footer class="footer">
-        <span class="footer-text">SideFlow Chrome Extension</span>
-      </footer>
+        <button id="launch-app" class="launch-button" type="button">Launch main app</button>
+      </section>
     </div>
     <script type="module" src="./main.ts"></script>
   </body>

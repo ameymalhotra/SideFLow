@@ -1,22 +1,13 @@
 import type { ChatScraper, ChatMessage, ScrapedContext } from './types';
 import {
-  debounce,
+  createDOMObserver,
   getTextContent,
   messageId,
-  simpleHash,
+  sortByDocumentPosition,
   createScrapedContext
 } from './base';
-
-function extractConversationId(): string | undefined {
-  const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
-  const match = pathname.match(/\/chat\/([^/]+)/i) ?? pathname.match(/\/([a-f0-9-]{8,})/i);
-  if (match?.[1]) return match[1];
-  const segments = pathname.split('/').filter(Boolean);
-  const last = segments[segments.length - 1];
-  if (last && last.length > 2 && /^[a-zA-Z0-9_-]+$/.test(last)) return last;
-  if (pathname && pathname !== '/') return simpleHash(pathname);
-  return undefined;
-}
+import { urlMatchesSite } from '../sites';
+import { extractClaudeConversationId } from './conversation-id';
 
 /** querySelectorAll that pierces shadow DOM */
 function queryAllDeep(root: Document | Element | ShadowRoot, selector: string): Element[] {
@@ -110,14 +101,12 @@ function scrape(): ScrapedContext {
     allBlocks.push({ el, role: 'assistant' as const });
   });
 
-  allBlocks.sort((a, b) =>
-    a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1
-  );
+  const orderedBlocks = sortByDocumentPosition(allBlocks, (b) => b.el);
 
   const messages: ChatMessage[] = [];
   const seenText = new Set<string>();
 
-  allBlocks.forEach(({ el, role }, i) => {
+  orderedBlocks.forEach(({ el, role }, i) => {
     const content = getMessageContent(el, role);
     if (!content || content.length < 2 || seenText.has(content)) return;
     seenText.add(content);
@@ -134,7 +123,7 @@ function scrape(): ScrapedContext {
     'claude',
     window.location.href,
     messages,
-    extractConversationId()
+    extractClaudeConversationId()
   );
 }
 
@@ -142,7 +131,7 @@ export class ClaudeScraper implements ChatScraper {
   site = 'claude' as const;
 
   isMatch(url: string): boolean {
-    return url.includes('claude.ai');
+    return urlMatchesSite(url, this.site);
   }
 
   scrape(): ScrapedContext {
@@ -150,11 +139,12 @@ export class ClaudeScraper implements ChatScraper {
   }
 
   observe(callback: (context: ScrapedContext) => void): () => void {
-    const debouncedCallback = debounce(() => {
-      callback(this.scrape());
-    }, 300);
-
-    const allSelectors = [...MESSAGE_SELECTORS, '[class*="standard-markdown"]', '[class*="font-claude-response-body"]', '[data-is-human-message="true"]'];
+    const allSelectors = [
+      ...MESSAGE_SELECTORS,
+      '[class*="standard-markdown"]',
+      '[class*="font-claude-response-body"]',
+      '[data-is-human-message="true"]',
+    ];
     let root: Element = document.body;
     for (const sel of allSelectors) {
       const first = document.querySelector(sel);
@@ -163,20 +153,6 @@ export class ClaudeScraper implements ChatScraper {
         break;
       }
     }
-
-    const observer = new MutationObserver(() => {
-      debouncedCallback();
-    });
-
-    observer.observe(root, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-      characterDataOldValue: true
-    });
-
-    debouncedCallback();
-
-    return () => observer.disconnect();
+    return createDOMObserver(root, () => this.scrape(), callback);
   }
 }

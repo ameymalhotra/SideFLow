@@ -1,31 +1,30 @@
 /**
- * Dev server: WebSocket only (stores scraped context).
- * Writes context to separate files per conversation: data/<site>-<conversationId>.json
- * Use saved JSON files to verify parsing. Run: npm run dev:server
+ * Dev/debug server: WebSocket-only context recorder.
+ *
+ * The Chrome extension does NOT connect here directly (its production path is
+ * Chrome Native Messaging → SideFlow Desktop). This script exists to capture
+ * scraped-context payloads as JSON files for parser/regression work — point
+ * a WS client (the native host, `wscat`, etc.) at it instead.
+ *
+ * Writes one file per conversation: data/<site>-<conversationId>.json
+ *
+ * Stop SideFlow Desktop first if it is bound to port 9847.
+ * Run: npm run dev:server
  */
 import { mkdir, writeFile } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import type { ScrapedContext } from '../src/lib/scrapers/types';
+import { simpleHash } from '../src/lib/scrapers/base';
+import type { Site } from '../src/lib/sites';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, 'data');
 
 const WS_PORT = 9847;
 
-const VALID_SITES = ['chatgpt', 'gemini', 'claude'] as const;
-type Site = (typeof VALID_SITES)[number];
-
-function simpleHash(str: string): string {
-  let h = 0;
-  for (let i = 0; i < str.length; i++) {
-    const c = str.charCodeAt(i);
-    h = (h << 5) - h + c;
-    h |= 0;
-  }
-  return Math.abs(h).toString(36);
-}
+const VALID_SITES = ['chatgpt', 'gemini', 'claude'] as const satisfies readonly Site[];
 
 function sanitizeFileKey(raw: string): string {
   return raw.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 64) || 'default';
@@ -45,11 +44,11 @@ async function saveContextToFile(context: ScrapedContext): Promise<void> {
   await writeFile(filePath, JSON.stringify(context, null, 2), 'utf-8');
 }
 
-// --- WebSocket server (extension connects here) ---
+// --- WebSocket server (connect any WS client; extension uses Native Messaging) ---
 const wss = new WebSocketServer({ port: WS_PORT });
 
 wss.on('connection', (ws, req) => {
-  console.log('[WS] Extension connected from', req.socket.remoteAddress);
+  console.log('[WS] Client connected from', req.socket.remoteAddress);
 
   ws.on('message', (data) => {
     try {
@@ -92,12 +91,11 @@ wss.on('connection', (ws, req) => {
     }
   });
 
-  ws.on('close', () => console.log('[WS] Extension disconnected'));
+  ws.on('close', () => console.log('[WS] Client disconnected'));
 });
 
-console.log(`WebSocket server: ws://127.0.0.1:${WS_PORT} (extension connects here)`);
+console.log(`WebSocket server: ws://127.0.0.1:${WS_PORT}`);
 console.log(`Data files:       ${DATA_DIR} (<site>-<conversationId>.json per conversation)`);
 console.log('');
-console.log('1. Load extension from dist/chrome-mv3');
-console.log('2. Open ChatGPT, Gemini, or Claude — scraped context is saved to scripts/data/');
-console.log('3. Inspect the JSON files to verify parsing.');
+console.log('Connect a WS client (the desktop native host, wscat, etc.) and feed it');
+console.log('chat_update / site_detected payloads to capture scraped contexts as JSON.');

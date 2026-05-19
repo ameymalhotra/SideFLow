@@ -34,7 +34,10 @@ body,
 }
 
 .glass-shadow-stack {
-  box-shadow: var(--sf-shadow-panel);
+  /* Inset glass + outer drop (personal-website: shadow-2xl shadow-black/30) */
+  box-shadow:
+    var(--sf-shadow-panel),
+    0 25px 50px -12px rgba(0, 0, 0, 0.3);
 }
 
 .glass-reflect-top {

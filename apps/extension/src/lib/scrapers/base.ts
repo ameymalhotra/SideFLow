@@ -13,6 +13,53 @@ export function debounce<T extends (...args: unknown[]) => void>(
   };
 }
 
+/**
+ * Observe `root` for DOM mutations and emit a fresh scrape on each settled
+ * change (and once eagerly at startup).
+ *
+ * All three site scrapers share the same shape:
+ *   - run an initial scrape so callers see whatever is already on the page,
+ *   - then debounce subsequent re-scrapes to one per `DEBOUNCE_MS` window.
+ *
+ * Returns a teardown function that disconnects the observer.
+ */
+export function createDOMObserver(
+  root: Node,
+  scrape: () => ScrapedContext,
+  callback: (context: ScrapedContext) => void,
+): () => void {
+  const debounced = debounce(() => {
+    callback(scrape());
+  }, DEBOUNCE_MS);
+
+  const observer = new MutationObserver(() => {
+    debounced();
+  });
+
+  observer.observe(root, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+    characterDataOldValue: true,
+  });
+
+  debounced();
+
+  return () => observer.disconnect();
+}
+
+/**
+ * Stable sort of `items` by the document order of their associated element.
+ * Used by scrapers that collect user/assistant blocks from different
+ * selectors and need to splice them back into the order the user sees.
+ */
+export function sortByDocumentPosition<T>(items: T[], getEl: (item: T) => Element): T[] {
+  return [...items].sort((a, b) => {
+    const cmp = getEl(a).compareDocumentPosition(getEl(b));
+    return cmp & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+  });
+}
+
 export function simpleHash(str: string): string {
   let h = 0;
   for (let i = 0; i < str.length; i++) {

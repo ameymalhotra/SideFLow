@@ -1,3 +1,5 @@
+import type { Site } from '../sites';
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -6,7 +8,7 @@ export interface ChatMessage {
 }
 
 export interface ScrapedContext {
-  site: 'chatgpt' | 'gemini' | 'claude';
+  site: Site;
   url: string;
   conversationId?: string;
   messages: ChatMessage[];
@@ -14,7 +16,7 @@ export interface ScrapedContext {
 }
 
 export interface ChatScraper {
-  site: 'chatgpt' | 'gemini' | 'claude';
+  site: Site;
   isMatch(url: string): boolean;
   scrape(): ScrapedContext;
   observe(callback: (context: ScrapedContext) => void): () => void;

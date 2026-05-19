@@ -1,12 +1,79 @@
 const { app, BrowserWindow, globalShortcut, ipcMain, screen } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const {
+  WS_PORT,
+  OVERLAY_PANEL_SIZE,
+  ORB_SIZE,
+  MANAGER_SIZE,
+  BROADCAST_DEBOUNCE_MS,
+} = require('./constants');
+const { createDesktopStateStore, getOrCreateBridgeToken } = require('./desktop-state');
+const { registerNativeMessagingHosts } = require('./register-native-messaging');
+const { startExtensionBridge } = require('./extension-bridge');
+const { runAssistantTurn } = require('./assistant');
 
-let chatWindow;
+const APP_PROTOCOL = 'sideflow';
+let overlayWindow;
+let managerWindow;
 let overlayMode = 'collapsed';
-const PANEL_SIZE = { width: 380, height: 480 };
-const ORB_SIZE = { width: 72, height: 72 };
+let broadcastDesktopTimer = null;
 let orbPosition = null;
+let wsServer = null;
+const desktopStore = createDesktopStateStore();
+let pendingProtocolUrl = null;
+
+function getShowFloatingOrb() {
+  return desktopStore.getState().preferences?.showFloatingOrb !== false;
+}
+
+/** Collapsed: show small orb or hide window. Expanded: always show. */
+function applyFloatingOrbVisibility() {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return;
+  if (overlayMode === 'expanded') {
+    overlayWindow.show();
+    return;
+  }
+  if (getShowFloatingOrb()) {
+    setCollapsedBounds();
+    overlayWindow.show();
+  } else {
+    overlayWindow.hide();
+  }
+}
+
+function parseProtocolTarget(rawUrl) {
+  if (typeof rawUrl !== 'string') return null;
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== `${APP_PROTOCOL}:`) return null;
+    const host = parsed.hostname || '';
+    const pathName = parsed.pathname.replace(/^\/+/, '');
+    const target = (host || pathName || 'manager').toLowerCase();
+    return target === 'orb' ? 'orb' : 'manager';
+  } catch {
+    return null;
+  }
+}
+
+function handleProtocolUrl(rawUrl) {
+  const target = parseProtocolTarget(rawUrl);
+  if (!target) return false;
+  if (
+    !app.isReady() ||
+    (target === 'orb' && (!overlayWindow || overlayWindow.isDestroyed())) ||
+    (target === 'manager' && (!managerWindow || managerWindow.isDestroyed()))
+  ) {
+    pendingProtocolUrl = rawUrl;
+    return true;
+  }
+  if (target === 'orb') {
+    focusOrb();
+  } else {
+    showManagerWindow();
+  }
+  return true;
+}
 
 function getStatePath() {
   return path.join(app.getPath('userData'), 'overlay-state.json');
@@ -14,13 +81,12 @@ function getStatePath() {
 
 function readSavedState() {
   try {
-    const raw = fs.readFileSync(getStatePath(), 'utf8');
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(fs.readFileSync(getStatePath(), 'utf8'));
     if (parsed && Number.isFinite(parsed.x) && Number.isFinite(parsed.y)) {
       orbPosition = { x: Math.round(parsed.x), y: Math.round(parsed.y) };
     }
-  } catch {
-    // No saved state yet.
+  } catch (err) {
+    console.error('[SideFlow] readSavedState failed:', err);
   }
 }
 
@@ -28,40 +94,33 @@ function saveState() {
   if (!orbPosition) return;
   try {
     fs.writeFileSync(getStatePath(), JSON.stringify(orbPosition), 'utf8');
-  } catch {
-    // Best-effort persistence.
+  } catch (err) {
+    console.error('[SideFlow] saveState failed:', err);
   }
 }
 
-/** Union of every display’s work area so the orb/panel can live on any monitor. */
 function getCombinedWorkArea() {
   const displays = screen.getAllDisplays();
-  if (displays.length === 0) {
-    return screen.getPrimaryDisplay().workArea;
-  }
+  if (displays.length === 0) return screen.getPrimaryDisplay().workArea;
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  for (const d of displays) {
-    const b = d.workArea;
-    minX = Math.min(minX, b.x);
-    minY = Math.min(minY, b.y);
-    maxX = Math.max(maxX, b.x + b.width);
-    maxY = Math.max(maxY, b.y + b.height);
+  for (const display of displays) {
+    const bounds = display.workArea;
+    minX = Math.min(minX, bounds.x);
+    minY = Math.min(minY, bounds.y);
+    maxX = Math.max(maxX, bounds.x + bounds.width);
+    maxY = Math.max(maxY, bounds.y + bounds.height);
   }
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
 function clampToAllDisplays(x, y, width, height) {
   const bounds = getCombinedWorkArea();
-  const minX = bounds.x;
-  const minY = bounds.y;
-  const maxX = bounds.x + bounds.width - width;
-  const maxY = bounds.y + bounds.height - height;
   return {
-    x: Math.min(Math.max(Math.round(x), minX), maxX),
-    y: Math.min(Math.max(Math.round(y), minY), maxY),
+    x: Math.min(Math.max(Math.round(x), bounds.x), bounds.x + bounds.width - width),
+    y: Math.min(Math.max(Math.round(y), bounds.y), bounds.y + bounds.height - height),
   };
 }
 
@@ -79,81 +138,176 @@ function getCurrentOrbPosition() {
 }
 
 function setCollapsedBounds() {
-  if (!chatWindow) return;
+  if (!overlayWindow) return;
   const next = getCurrentOrbPosition();
-  chatWindow.setBounds({ x: next.x, y: next.y, width: ORB_SIZE.width, height: ORB_SIZE.height }, false);
+  overlayWindow.setBounds({ x: next.x, y: next.y, width: ORB_SIZE.width, height: ORB_SIZE.height }, false);
 }
 
 function setExpandedBounds() {
-  if (!chatWindow) return;
+  if (!overlayWindow) return;
   const orb = getCurrentOrbPosition();
   const orbCenterX = orb.x + ORB_SIZE.width / 2;
   const orbCenterY = orb.y + ORB_SIZE.height / 2;
   const target = clampToAllDisplays(
-    orbCenterX - PANEL_SIZE.width / 2,
-    orbCenterY - PANEL_SIZE.height / 2,
-    PANEL_SIZE.width,
-    PANEL_SIZE.height,
+    orbCenterX - OVERLAY_PANEL_SIZE.width / 2,
+    orbCenterY - OVERLAY_PANEL_SIZE.height / 2,
+    OVERLAY_PANEL_SIZE.width,
+    OVERLAY_PANEL_SIZE.height,
   );
-  chatWindow.setBounds({ x: target.x, y: target.y, width: PANEL_SIZE.width, height: PANEL_SIZE.height }, false);
+  overlayWindow.setBounds(
+    { x: target.x, y: target.y, width: OVERLAY_PANEL_SIZE.width, height: OVERLAY_PANEL_SIZE.height },
+    false,
+  );
 }
 
-// #region agent log
-function _dbg(data) { try { fs.appendFileSync('/Users/ameymalhotra/overlay-ai/.cursor/debug-a2e664.log', JSON.stringify({sessionId:'a2e664',timestamp:Date.now(),...data})+'\n','utf8'); } catch(e) {} }
-// #endregion
+function getExpansionInfo() {
+  const orb = getCurrentOrbPosition();
+  const orbCenterX = orb.x + ORB_SIZE.width / 2;
+  const orbCenterY = orb.y + ORB_SIZE.height / 2;
+  const target = clampToAllDisplays(
+    orbCenterX - OVERLAY_PANEL_SIZE.width / 2,
+    orbCenterY - OVERLAY_PANEL_SIZE.height / 2,
+    OVERLAY_PANEL_SIZE.width,
+    OVERLAY_PANEL_SIZE.height,
+  );
+  const orbLeft = orbCenterX - target.x;
+  const orbTop = orbCenterY - target.y;
+  return {
+    orbLeft,
+    orbTop,
+    originX: (orbLeft / OVERLAY_PANEL_SIZE.width) * 100,
+    originY: (orbTop / OVERLAY_PANEL_SIZE.height) * 100,
+  };
+}
+
+function loadRenderer(windowRef, view) {
+  const isDev = process.env.NODE_ENV === 'development';
+  if (isDev) {
+    windowRef.loadURL(`http://localhost:5173/?view=${view}`);
+  } else {
+    windowRef.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { query: { view } });
+  }
+}
+
+function sendToWindow(windowRef, channel, payload) {
+  if (!windowRef || windowRef.isDestroyed()) return;
+  windowRef.webContents.send(channel, payload);
+}
+
+function getActiveContextLabel() {
+  const state = desktopStore.getState();
+  const activeConversation =
+    state.conversations.find((item) => item.id === state.activeConversationId) ?? state.conversations[0] ?? null;
+  if (!activeConversation) return 'Waiting for extension context';
+  return `${activeConversation.site.toUpperCase()} • ${activeConversation.lastMessagePreview}`;
+}
+
+function getActiveConversation() {
+  const state = desktopStore.getState();
+  return state.conversations.find((item) => item.id === state.activeConversationId) ?? state.conversations[0] ?? null;
+}
+
+/** True when a synced browser chat exists with at least one captured message (same bar as LLM context). */
+function isChatContextAvailable() {
+  const conv = getActiveConversation();
+  return Boolean(conv && Array.isArray(conv.messages) && conv.messages.length > 0);
+}
+
+function getOverlayContextPayload() {
+  const state = desktopStore.getState();
+  return {
+    label: getActiveContextLabel(),
+    chatAvailable: isChatContextAvailable(),
+    activeConversationId: state.activeConversationId,
+  };
+}
+
+function broadcastDesktopState() {
+  const state = desktopStore.getPublicState();
+  sendToWindow(managerWindow, 'desktop-state', state);
+  sendToWindow(overlayWindow, 'desktop-state', state);
+  const modelsState = {
+    models: state.connectedModels.map((model) => ({ id: model.id, label: model.label })),
+    selectedId: state.selectedModelId,
+  };
+  sendToWindow(overlayWindow, 'models-state', modelsState);
+  sendToWindow(managerWindow, 'models-state', modelsState);
+  sendToWindow(overlayWindow, 'ctx', getOverlayContextPayload());
+}
+
+function scheduleBroadcastDesktopState() {
+  if (broadcastDesktopTimer) {
+    clearTimeout(broadcastDesktopTimer);
+  }
+  broadcastDesktopTimer = setTimeout(() => {
+    broadcastDesktopTimer = null;
+    broadcastDesktopState();
+  }, BROADCAST_DEBOUNCE_MS);
+}
 
 function notifyMode() {
-  chatWindow?.webContents.send('overlay-mode', overlayMode);
+  sendToWindow(overlayWindow, 'overlay-mode', overlayMode);
 }
 
-/** After setPosition/setBounds, Chromium often stalemates CSS -webkit-app-region; nudge the renderer. */
 function notifyBoundsChanged() {
-  if (!chatWindow || chatWindow.isDestroyed()) return;
-  const bounds = chatWindow.getBounds();
-  chatWindow.webContents.send('overlay-bounds-changed', {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return;
+  const bounds = overlayWindow.getBounds();
+  sendToWindow(overlayWindow, 'overlay-bounds-changed', {
     mode: overlayMode,
     x: bounds.x,
     y: bounds.y,
   });
 }
 
-// resizeToMode: resize the window immediately (used when the renderer has already painted new content).
-function resizeToMode(nextMode) {
-  if (!chatWindow) return;
+function resizeOverlayToMode(nextMode) {
+  if (!overlayWindow) return;
   overlayMode = nextMode;
-  // #region agent log
-  _dbg({location:'main.js:resizeToMode',message:'resizeToMode called — about to setBounds',data:{nextMode},hypothesisId:'A,F'});
-  // #endregion
   if (nextMode === 'expanded') {
     setExpandedBounds();
-    // #region agent log
-    _dbg({location:'main.js:resizeToMode',message:'setBounds expanded done',data:{nextMode,bounds:chatWindow.getBounds()},hypothesisId:'A,F'});
-    // #endregion
-    chatWindow.show();
-    chatWindow.focus();
-    chatWindow.webContents.send('focus-input');
+    overlayWindow.show();
+    overlayWindow.focus();
+    sendToWindow(overlayWindow, 'focus-input');
   } else {
     setCollapsedBounds();
-    // #region agent log
-    _dbg({location:'main.js:resizeToMode',message:'setBounds collapsed done',data:{nextMode,bounds:chatWindow.getBounds()},hypothesisId:'A,F'});
-    // #endregion
-    chatWindow.show();
+    if (getShowFloatingOrb()) {
+      overlayWindow.show();
+    } else {
+      overlayWindow.hide();
+    }
   }
   notifyBoundsChanged();
 }
 
-// notifyModeChange: tell the renderer to change its state; renderer will re-render then call
-// back with overlay-expand / overlay-collapse so the window resizes after content is ready.
-function notifyModeChange(nextMode) {
-  if (!chatWindow) return;
-  overlayMode = nextMode;
-  notifyMode();
+function focusOrb() {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return;
+  if (getShowFloatingOrb()) {
+    overlayWindow.show();
+    overlayWindow.focus();
+    return;
+  }
+  resizeOverlayToMode('expanded');
+  overlayWindow.focus();
+  sendToWindow(overlayWindow, 'focus-input');
 }
 
-function createWindow() {
+function showManagerWindow() {
+  if (!managerWindow || managerWindow.isDestroyed()) return;
+  managerWindow.show();
+  managerWindow.focus();
+}
+
+function registerAppProtocol() {
+  if (process.defaultApp && process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient(APP_PROTOCOL, process.execPath, [path.resolve(process.argv[1])]);
+    return;
+  }
+  app.setAsDefaultProtocolClient(APP_PROTOCOL);
+}
+
+function createOverlayWindow() {
   readSavedState();
   const start = getCurrentOrbPosition();
-  chatWindow = new BrowserWindow({
+  overlayWindow = new BrowserWindow({
     x: start.x,
     y: start.y,
     width: ORB_SIZE.width,
@@ -173,74 +327,179 @@ function createWindow() {
     },
   });
 
-  // Stay above normal windows; on macOS also float above fullscreen apps / all Spaces.
   if (process.platform === 'darwin') {
-    chatWindow.setAlwaysOnTop(true, 'floating');
-    chatWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    overlayWindow.setAlwaysOnTop(true, 'floating');
+    overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   } else if (process.platform === 'linux') {
-    chatWindow.setVisibleOnAllWorkspaces(true);
+    overlayWindow.setVisibleOnAllWorkspaces(true);
   }
 
-  const isDev = process.env.NODE_ENV === 'development';
+  loadRenderer(overlayWindow, 'overlay');
 
-  if (isDev) {
-    chatWindow.loadURL('http://localhost:5173');
-  } else {
-    // FIX: path relative to project root, not electron/ dir
-    chatWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
-  }
-
-  chatWindow.once('ready-to-show', () => {
-    chatWindow.show();
+  overlayWindow.once('ready-to-show', () => {
+    applyFloatingOrbVisibility();
     notifyMode();
+    scheduleBroadcastDesktopState();
   });
 }
 
-app.whenReady().then(() => {
-  createWindow();
+function createManagerWindow() {
+  managerWindow = new BrowserWindow({
+    width: MANAGER_SIZE.width,
+    height: MANAGER_SIZE.height,
+    minWidth: 1100,
+    minHeight: 760,
+    title: 'SideFlow Desktop',
+    backgroundColor: '#0a111d',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
 
-  globalShortcut.register('Control+Q', () => {
-    if (!chatWindow) return;
-    // Tell the renderer to change mode — it will render the new content then call back
-    // with overlay-expand / overlay-collapse so the window resizes after content is ready.
+  loadRenderer(managerWindow, 'manager');
+  managerWindow.once('ready-to-show', () => {
+    managerWindow.show();
+    scheduleBroadcastDesktopState();
+  });
+  managerWindow.on('closed', () => {
+    managerWindow = null;
+  });
+}
+
+/**
+ * Unpacked dev: skip the lock so a second `npm run dev` still runs Electron (otherwise the new process exits immediately and the WebSocket never starts). Packaged app always uses a single instance. Set SIDEFLOW_SINGLE_INSTANCE=1 in dev to test the real second-instance path.
+ */
+const skipSingleInstanceLock =
+  !app.isPackaged &&
+  process.env.NODE_ENV === 'development' &&
+  process.env.SIDEFLOW_SINGLE_INSTANCE !== '1';
+const singleInstanceLock = skipSingleInstanceLock ? true : app.requestSingleInstanceLock();
+
+if (!singleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, commandLine) => {
+    const protocolArg = commandLine.find((arg) => typeof arg === 'string' && arg.startsWith(`${APP_PROTOCOL}://`));
+    if (protocolArg && handleProtocolUrl(protocolArg)) return;
+    showManagerWindow();
+    focusOrb();
+  });
+
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    handleProtocolUrl(url);
+  });
+
+  app.whenReady().then(() => {
+    registerAppProtocol();
+    createOverlayWindow();
+    createManagerWindow();
+    wsServer = startExtensionBridge({
+      desktopStore,
+      scheduleBroadcast: scheduleBroadcastDesktopState,
+      getBridgeToken: getOrCreateBridgeToken,
+      electronApp: app,
+    });
+
+    let nmElectronDir = __dirname;
+    if (app.isPackaged) {
+      const unpackedElectron = path.join(process.resourcesPath, 'app.asar.unpacked', 'electron');
+      const hostJs = path.join(unpackedElectron, 'native-host', 'sideflow-native-host.js');
+      if (fs.existsSync(hostJs)) {
+        nmElectronDir = unpackedElectron;
+      }
+    }
+    registerNativeMessagingHosts(nmElectronDir);
+
+    const initialProtocolArg = process.argv.find((arg) => typeof arg === 'string' && arg.startsWith(`${APP_PROTOCOL}://`));
+    if (pendingProtocolUrl) {
+      const queuedUrl = pendingProtocolUrl;
+      pendingProtocolUrl = null;
+      handleProtocolUrl(queuedUrl);
+    } else if (initialProtocolArg) {
+      handleProtocolUrl(initialProtocolArg);
+    }
+
+  function isTrustedSender(event) {
+    const senderId = event?.sender?.id;
+    const overlayId = overlayWindow && !overlayWindow.isDestroyed() ? overlayWindow.webContents.id : null;
+    const managerId = managerWindow && !managerWindow.isDestroyed() ? managerWindow.webContents.id : null;
+    return senderId != null && (senderId === overlayId || senderId === managerId);
+  }
+
+  const registeredShortcut = globalShortcut.register('Control+Q', () => {
+    if (!overlayWindow) return;
     const nextMode = overlayMode === 'collapsed' ? 'expanded' : 'collapsed';
-    notifyModeChange(nextMode);
+    overlayMode = nextMode;
+    notifyMode();
+  });
+  if (!registeredShortcut) {
+    console.warn('[SideFlow] Global shortcut Control+Q could not be registered.');
+  }
+
+  ipcMain.handle('desktop-launch-orb', (event) => {
+    if (!isTrustedSender(event)) return;
+    focusOrb();
   });
 
-  ipcMain.on('extension-context', (_event, ctx) => {
-    chatWindow?.webContents.send('ctx', ctx);
+  ipcMain.handle('models-get-state', (event) => {
+    if (!isTrustedSender(event)) return null;
+    const state = desktopStore.getPublicState();
+    return {
+      models: state.connectedModels.map((model) => ({ id: model.id, label: model.label })),
+      selectedId: state.selectedModelId,
+    };
   });
 
-  ipcMain.on('hide-window', () => {
-    // Renderer already set its state; just resize.
-    resizeToMode('collapsed');
+  ipcMain.on('models-set-selected', (event, payload) => {
+    if (!isTrustedSender(event)) return;
+    desktopStore.setSelectedModel(payload ?? {});
+    scheduleBroadcastDesktopState();
   });
 
-  ipcMain.on('overlay-expand', () => {
-    // Renderer has already painted the chat panel — now resize the window to fit it.
-    resizeToMode('expanded');
+  ipcMain.handle('overlay-get-expansion-info', (event) => {
+    if (!isTrustedSender(event)) return null;
+    return getExpansionInfo();
+  });
+  ipcMain.handle('overlay-prepare-expand', (event) => {
+    if (!isTrustedSender(event)) return;
+    if (!overlayWindow) return;
+    setExpandedBounds();
+    notifyBoundsChanged();
+  });
+  ipcMain.on('overlay-expand', (event) => {
+    if (!isTrustedSender(event)) return;
+    resizeOverlayToMode('expanded');
+  });
+  ipcMain.on('overlay-collapse', (event) => {
+    if (!isTrustedSender(event)) return;
+    resizeOverlayToMode('collapsed');
   });
 
-  ipcMain.on('overlay-collapse', () => {
-    // Renderer has already painted the orb — now shrink the window back.
-    resizeToMode('collapsed');
-  });
-
-  ipcMain.handle('overlay-get-state', () => {
-    const bounds = chatWindow?.getBounds() ?? { x: 0, y: 0 };
+  ipcMain.handle('overlay-get-state', (event) => {
+    if (!isTrustedSender(event)) return null;
+    const bounds = overlayWindow?.getBounds() ?? { x: 0, y: 0 };
     return { mode: overlayMode, x: bounds.x, y: bounds.y };
   });
 
-  ipcMain.handle('overlay-move', (_event, coords) => {
-    if (!chatWindow) return { x: 0, y: 0 };
-    const w = overlayMode === 'expanded' ? PANEL_SIZE.width : ORB_SIZE.width;
-    const h = overlayMode === 'expanded' ? PANEL_SIZE.height : ORB_SIZE.height;
-    const clamped = clampToAllDisplays(coords.x, coords.y, w, h);
-    chatWindow.setPosition(clamped.x, clamped.y, false);
+  ipcMain.handle('overlay-move', (event, coords) => {
+    if (!isTrustedSender(event)) return { x: 0, y: 0 };
+    if (!overlayWindow) return { x: 0, y: 0 };
+    const x = Number(coords?.x);
+    const y = Number(coords?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      const b = overlayWindow.getBounds();
+      return { x: b.x, y: b.y };
+    }
+    const w = overlayMode === 'expanded' ? OVERLAY_PANEL_SIZE.width : ORB_SIZE.width;
+    const h = overlayMode === 'expanded' ? OVERLAY_PANEL_SIZE.height : ORB_SIZE.height;
+    const clamped = clampToAllDisplays(x, y, w, h);
+    overlayWindow.setPosition(clamped.x, clamped.y, false);
     if (overlayMode === 'expanded') {
-      // Keep orb anchor in sync with panel so collapse lands in the right place after dragging the chat.
-      const ox = Math.round(clamped.x + PANEL_SIZE.width / 2 - ORB_SIZE.width / 2);
-      const oy = Math.round(clamped.y + PANEL_SIZE.height / 2 - ORB_SIZE.height / 2);
+      const ox = Math.round(clamped.x + OVERLAY_PANEL_SIZE.width / 2 - ORB_SIZE.width / 2);
+      const oy = Math.round(clamped.y + OVERLAY_PANEL_SIZE.height / 2 - ORB_SIZE.height / 2);
       orbPosition = clampToAllDisplays(ox, oy, ORB_SIZE.width, ORB_SIZE.height);
     } else {
       orbPosition = clamped;
@@ -249,15 +508,93 @@ app.whenReady().then(() => {
     return clamped;
   });
 
-  ipcMain.on('overlay-save-position', () => {
+  ipcMain.on('overlay-save-position', (event) => {
+    if (!isTrustedSender(event)) return;
     saveState();
   });
 
+  ipcMain.handle('desktop-set-preferences', (event, payload) => {
+    if (!isTrustedSender(event)) return null;
+    const state = desktopStore.setPreferences(payload ?? {});
+    scheduleBroadcastDesktopState();
+    applyFloatingOrbVisibility();
+    notifyMode();
+    return state;
+  });
+
+  ipcMain.handle('desktop-get-state', (event) => {
+    if (!isTrustedSender(event)) return null;
+    return desktopStore.getPublicState();
+  });
+
+  ipcMain.handle('desktop-save-api-key', (event, payload) => {
+    if (!isTrustedSender(event)) return null;
+    const state = desktopStore.saveApiKey(payload ?? {});
+    scheduleBroadcastDesktopState();
+    return state;
+  });
+
+  ipcMain.handle('desktop-remove-api-key', (event, payload) => {
+    if (!isTrustedSender(event)) return null;
+    const state = desktopStore.removeApiKey(payload ?? {});
+    scheduleBroadcastDesktopState();
+    return state;
+  });
+
+  ipcMain.handle('desktop-save-model', (event, payload) => {
+    if (!isTrustedSender(event)) return null;
+    const state = desktopStore.upsertModel(payload ?? {});
+    scheduleBroadcastDesktopState();
+    return state;
+  });
+
+  ipcMain.handle('desktop-remove-model', (event, payload) => {
+    if (!isTrustedSender(event)) return null;
+    const state = desktopStore.removeModel(payload ?? {});
+    scheduleBroadcastDesktopState();
+    return state;
+  });
+
+  ipcMain.handle('desktop-set-active-conversation', (event, payload) => {
+    if (!isTrustedSender(event)) return null;
+    const state = desktopStore.setActiveConversation(payload ?? {});
+    scheduleBroadcastDesktopState();
+    return state;
+  });
+
+  ipcMain.handle('desktop-complete-onboarding', (event, payload) => {
+    if (!isTrustedSender(event)) return null;
+    const state = desktopStore.completeOnboarding(payload ?? {});
+    scheduleBroadcastDesktopState();
+    return state;
+  });
+
+  ipcMain.handle('desktop-delete-conversation', (event, payload) => {
+    if (!isTrustedSender(event)) return null;
+    const state = desktopStore.deleteConversation(payload ?? {});
+    scheduleBroadcastDesktopState();
+    return state;
+  });
+
+  ipcMain.handle('assistant-ask', async (event, payload) => {
+    if (!isTrustedSender(event)) return { ok: false, content: 'Untrusted sender.' };
+    return runAssistantTurn(
+      {
+        desktopStore,
+        onChunk: (text) => sendToWindow(overlayWindow, 'assistant-chunk', { text }),
+        onDone: (fullText) => sendToWindow(overlayWindow, 'assistant-done', { fullText }),
+        onError: (error) => sendToWindow(overlayWindow, 'assistant-error', { error }),
+        onSideflowChatPersisted: scheduleBroadcastDesktopState,
+      },
+      payload,
+    );
+  });
+
   const reclampToWorkArea = () => {
-    if (!chatWindow || overlayMode !== 'collapsed') return;
+    if (!overlayWindow || overlayMode !== 'collapsed') return;
     const clamped = getCurrentOrbPosition();
     orbPosition = clamped;
-    chatWindow.setPosition(clamped.x, clamped.y, false);
+    overlayWindow.setPosition(clamped.x, clamped.y, false);
     notifyBoundsChanged();
     saveState();
   };
@@ -266,16 +603,33 @@ app.whenReady().then(() => {
   screen.on('display-metrics-changed', reclampToWorkArea);
   screen.on('display-added', reclampToWorkArea);
 
+  app.on('activate', () => {
+    if (!managerWindow) createManagerWindow();
+    showManagerWindow();
+    focusOrb();
+  });
+
   app.on('before-quit', () => {
     saveState();
+    if (wsServer) {
+      wsServer.close();
+      wsServer = null;
+    }
     screen.removeListener('display-removed', reclampToWorkArea);
     screen.removeListener('display-metrics-changed', reclampToWorkArea);
     screen.removeListener('display-added', reclampToWorkArea);
   });
-});
+  }).catch((err) => {
+    console.error('[SideFlow] App startup failed:', err);
+  });
 
-app.on('will-quit', () => {
-  globalShortcut.unregisterAll();
-});
+  app.on('will-quit', () => {
+    globalShortcut.unregisterAll();
+  });
 
-app.on('window-all-closed', (e) => e.preventDefault());
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
+      app.quit();
+    }
+  });
+}

@@ -13,7 +13,6 @@
     "zip:firefox": "wxt zip -b firefox",
     "postinstall": "wxt prepare",
     "test:server": "node scripts/test-ws-server.js",
-    "test:llm-messages": "npx tsx scripts/test-build-llm-messages.ts",
     "dev:server": "npx tsx scripts/dev-server-with-ask.ts"
   },
   "devDependencies": {

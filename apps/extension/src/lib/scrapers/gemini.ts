@@ -1,31 +1,13 @@
 import type { ChatScraper, ChatMessage, ScrapedContext } from './types';
 import {
-  debounce,
+  createDOMObserver,
   getTextContent,
   messageId,
-  simpleHash,
+  sortByDocumentPosition,
   createScrapedContext
 } from './base';
-
-function extractConversationId(): string | undefined {
-  const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
-  const segments = pathname.split('/').filter(Boolean);
-  const last = segments[segments.length - 1];
-  if (last && last.length > 2 && /^[a-zA-Z0-9_-]+$/.test(last)) return last;
-  if (pathname && pathname !== '/') return simpleHash(pathname);
-  return undefined;
-}
-
-const CONVERSATION_SELECTORS = [
-  '[data-conversation-container]',
-  '.conversation-container',
-  '[data-conversation]',
-  '[class*="conversation"]',
-  '[role="main"]',
-  'main',
-  '[class*="chat"]',
-  '[class*="thread"]'
-];
+import { urlMatchesSite } from '../sites';
+import { extractGeminiConversationId } from './conversation-id';
 
 const USER_SELECTORS = [
   '[data-user-query]',
@@ -64,16 +46,11 @@ function findMessages(container: Element): ChatMessage[] {
   const userEls = container.querySelectorAll(USER_SELECTORS.join(', '));
   const assistantEls = container.querySelectorAll(ASSISTANT_SELECTORS.join(', '));
 
-  const allBlocks: { el: Element; role: 'user' | 'assistant' }[] = [];
-  userEls.forEach((el) => allBlocks.push({ el, role: 'user' }));
-  assistantEls.forEach((el) => allBlocks.push({ el, role: 'assistant' }));
+  const rawBlocks: { el: Element; role: 'user' | 'assistant' }[] = [];
+  userEls.forEach((el) => rawBlocks.push({ el, role: 'user' }));
+  assistantEls.forEach((el) => rawBlocks.push({ el, role: 'assistant' }));
 
-  allBlocks.sort(
-    (a, b) =>
-      (a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING)
-        ? -1
-        : 1
-  );
+  const allBlocks = sortByDocumentPosition(rawBlocks, (b) => b.el);
 
   const seen = new Set<Element>();
   for (const { el, role } of allBlocks) {
@@ -119,23 +96,10 @@ function findMessages(container: Element): ChatMessage[] {
   }
 
   if (messages.length === 0) {
-    const segments = container.querySelectorAll(
-      '[class*="segment"], [class*="block"], [class*="content"] p, [class*="message"] > div'
-    );
-    const textBlocks: { text: string; el: Element }[] = [];
-    segments.forEach((el) => {
-      const text = getTextContent(el);
-      if (text && text.length > 2) textBlocks.push({ text, el });
-    });
-    textBlocks.forEach(({ text }, i) => {
-      const role: 'user' | 'assistant' = i % 2 === 0 ? 'user' : 'assistant';
-      messages.push({
-        id: messageId(text, i),
-        role,
-        content: text,
-        isStreaming: false
-      });
-    });
+    // Do not guess roles (even/odd); wait for a reliable DOM pass instead.
+    if (typeof console !== 'undefined' && console.debug) {
+      console.debug('[SideFlow] Gemini: no messages matched selectors');
+    }
   }
 
   return messages;
@@ -145,7 +109,7 @@ export class GeminiScraper implements ChatScraper {
   site = 'gemini' as const;
 
   isMatch(url: string): boolean {
-    return url.includes('gemini.google.com');
+    return urlMatchesSite(url, this.site);
   }
 
   scrape(): ScrapedContext {
@@ -154,28 +118,15 @@ export class GeminiScraper implements ChatScraper {
       this.site,
       window.location.href,
       messages,
-      extractConversationId()
+      extractGeminiConversationId()
     );
   }
 
   observe(callback: (context: ScrapedContext) => void): () => void {
-    const debouncedCallback = debounce(() => {
-      callback(this.scrape());
-    }, 300);
-
-    const observer = new MutationObserver(() => {
-      debouncedCallback();
-    });
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-      characterDataOldValue: true
-    });
-
-    debouncedCallback();
-
-    return () => observer.disconnect();
+    const root =
+      document.querySelector('[class*="conversation"]') ??
+      document.querySelector('main') ??
+      document.body;
+    return createDOMObserver(root, () => this.scrape(), callback);
   }
 }
