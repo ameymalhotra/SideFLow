@@ -8,9 +8,16 @@
     "dev:vite": "vite",
     "dev:electron": "cross-env NODE_ENV=development electron .",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "dist": "npm run build && electron-builder",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:win": "npm run build && electron-builder --win"
   },
   "dependencies": {
+    "ws": "^8.18.0",
+    "@langchain/anthropic": "^1.3.29",
+    "@langchain/core": "^1.1.39",
+    "@langchain/openai": "^1.4.4",
     "framer-motion": "^12.23.12",
     "lucide-react": "^0.542.0",
     "react": "^18.3.1",
@@ -24,10 +31,50 @@
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",
     "electron": "^41.0.4",
+    "electron-builder": "^26.0.12",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.9.3",
     "vite": "^8.0.2",
     "wait-on": "^9.0.4"
+  },
+  "build": {
+    "appId": "ai.sideflow.desktop",
+    "productName": "SideFlow",
+    "asar": true,
+    "asarUnpack": [
+      "electron/native-host/**"
+    ],
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "protocols": [
+      {
+        "name": "SideFlow Deep Link",
+        "schemes": [
+          "sideflow"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility"
+    }
   }
 }
